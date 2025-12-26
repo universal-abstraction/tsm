@@ -1,0 +1,264 @@
+#!/bin/bash
+#
+# tsm - A minimal, keyboard-driven tmux session manager
+#
+# Usage: tsm [options]
+#
+# Options:
+#   --help    Show this help message
+#   --config  Print config file location
+#
+
+set -euo pipefail
+
+# ============================================================================
+# SECTION 1: XDG PATHS & DIRECTORIES
+# ============================================================================
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/tsm"
+CONFIG_FILE="$CONFIG_DIR/config"
+
+# ============================================================================
+# SECTION 2: DEFAULT CONFIGURATION
+# ============================================================================
+
+: "${TERMINAL:=foot}"
+: "${MENU_LAUNCHER:=wofi}"
+: "${RECENT_SESSIONS_COUNT:=10}"
+
+# ============================================================================
+# SECTION 3: INITIALIZATION & CONFIG LOADING
+# ============================================================================
+
+init_config() {
+    mkdir -p "$CONFIG_DIR"
+
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        cat > "$CONFIG_FILE" << 'EOF'
+# tsm configuration
+
+# Terminal emulator
+TERMINAL="foot"
+
+# Menu launcher: wofi, rofi, dmenu, or fzf
+MENU_LAUNCHER="wofi"
+
+# Number of recent sessions to show in menu
+RECENT_SESSIONS_COUNT="10"
+EOF
+    fi
+}
+
+load_config() {
+    [[ -f "$CONFIG_FILE" ]] && source "$CONFIG_FILE"
+}
+
+# ============================================================================
+# SECTION 4: CORE FUNCTIONS
+# ============================================================================
+
+get_sessions() {
+    tmux list-sessions -F "#{session_name}" 2>/dev/null | head -n "$RECENT_SESSIONS_COUNT" || true
+}
+
+session_exists() {
+    local name="$1"
+    tmux has-session -t "$name" 2>/dev/null
+}
+
+create_session() {
+    local name="$1"
+    tmux new-session -d -s "$name"
+}
+
+attach_session() {
+    local name="$1"
+    $TERMINAL tmux attach-session -t "$name" &
+}
+
+normalize_session_name() {
+    local input="$1"
+    # tmux doesn't allow dots and colons in session names
+    echo "$input" | tr ' .:' '---' | sed 's/--*/-/g; s/^-//; s/-$//'
+}
+
+notify() {
+    local message="$1"
+    if command -v notify-send &>/dev/null; then
+        notify-send "tsm" "$message"
+    else
+        echo "[tsm] $message" >&2
+    fi
+}
+
+# ============================================================================
+# SECTION 5: MENU & UI
+# ============================================================================
+
+ICON_NEW="✨"
+ICON_SESSION="💻"
+
+build_menu() {
+    echo "$ICON_NEW New Session"
+
+    local sessions
+    sessions=$(get_sessions)
+    if [[ -n "$sessions" ]]; then
+        while IFS= read -r session; do
+            echo "$ICON_SESSION $session"
+        done <<< "$sessions"
+    fi
+}
+
+show_menu() {
+    case "$MENU_LAUNCHER" in
+        wofi)
+            wofi --dmenu --prompt "tmux" --cache-file=/dev/null
+            ;;
+        rofi)
+            rofi -dmenu -p "tmux"
+            ;;
+        dmenu)
+            dmenu -p "tmux"
+            ;;
+        fzf)
+            fzf --prompt="tmux> " --height=40%
+            ;;
+        *)
+            echo "Unknown menu launcher: $MENU_LAUNCHER" >&2
+            exit 1
+            ;;
+    esac
+}
+
+prompt_input() {
+    local prompt_text="$1"
+
+    case "$MENU_LAUNCHER" in
+        wofi)
+            echo "" | wofi --dmenu \
+                --prompt "$prompt_text" \
+                --cache-file=/dev/null \
+                --lines 0
+            ;;
+        rofi)
+            echo "" | rofi -dmenu -p "$prompt_text" -lines 0
+            ;;
+        dmenu)
+            echo "" | dmenu -p "$prompt_text"
+            ;;
+        fzf)
+            read -p "$prompt_text: " input
+            echo "$input"
+            ;;
+        *)
+            read -p "$prompt_text: " input
+            echo "$input"
+            ;;
+    esac
+}
+
+create_new_session() {
+    local session_name
+    session_name=$(prompt_input "Session name")
+
+    [[ -z "$session_name" ]] && return 1
+
+    local normalized
+    normalized=$(normalize_session_name "$session_name")
+
+    [[ -z "$normalized" ]] && notify "Invalid session name" && return 1
+
+    if session_exists "$normalized"; then
+        notify "Session already exists: $normalized"
+        attach_session "$normalized"
+        return 0
+    fi
+
+    create_session "$normalized"
+    attach_session "$normalized"
+}
+
+handle_selection() {
+    local selection="$1"
+
+    case "$selection" in
+        *"New Session"*)
+            create_new_session
+            ;;
+        *)
+            local session_name
+            session_name=$(echo "$selection" | sed "s/^$ICON_SESSION //" | tr -d ' ')
+
+            if session_exists "$session_name"; then
+                attach_session "$session_name"
+            else
+                notify "Session not found: $session_name"
+                exit 1
+            fi
+            ;;
+    esac
+}
+
+# ============================================================================
+# SECTION 6: COMMAND LINE INTERFACE
+# ============================================================================
+
+show_help() {
+    cat << 'EOF'
+tsm - A minimal, keyboard-driven tmux session manager
+
+USAGE:
+    tsm [OPTIONS]
+
+OPTIONS:
+    --help      Show this help message
+    --config    Print config file location
+    --version   Show version information
+
+CONFIGURATION:
+    Config file: ~/.config/tsm/config
+
+KEYBINDING EXAMPLES:
+    Hyprland:  bind = SUPER, T, exec, tsm
+    Sway:      bindsym $mod+t exec tsm
+    i3:        bindsym $mod+t exec --no-startup-id tsm
+EOF
+}
+
+# ============================================================================
+# SECTION 7: MAIN ENTRY POINT
+# ============================================================================
+
+main() {
+    case "${1:-}" in
+        --help|-h)
+            show_help
+            exit 0
+            ;;
+        --config)
+            echo "$CONFIG_FILE"
+            exit 0
+            ;;
+        --version|-v)
+            echo "tsm 0.1.0"
+            exit 0
+            ;;
+        -*)
+            echo "Unknown option: $1" >&2
+            exit 1
+            ;;
+    esac
+
+    init_config
+    load_config
+
+    local selection
+    selection=$(build_menu | show_menu)
+
+    [[ -z "$selection" ]] && exit 0
+
+    handle_selection "$selection"
+}
+
+main "$@"
