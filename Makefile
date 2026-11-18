@@ -1,16 +1,17 @@
 PREFIX ?= $(HOME)/.local
 BINDIR = $(PREFIX)/bin
 
-.PHONY: all install uninstall help
+.PHONY: all install uninstall lint help
 
 all: help
 
 help:
-	@echo "tsm - A simple tmux sessions manager"
+	@echo "tsm - a minimal tmux session manager"
 	@echo ""
 	@echo "Usage:"
-	@echo "  make install    - Install tsm to ~/.local/bin"
-	@echo "  make uninstall  - Remove installed files"
+	@echo "  make install    - Install tsm to $(BINDIR)"
+	@echo "  make uninstall  - Remove $(BINDIR)/tsm"
+	@echo "  make lint       - Run shellcheck"
 	@echo ""
 	@echo "Variables:"
 	@echo "  PREFIX          - Installation prefix (default: ~/.local)"
@@ -18,25 +19,27 @@ help:
 install:
 	@echo "Installing tsm..."
 	@mkdir -p $(BINDIR)
-	@cp tsm $(BINDIR)/tsm
-	@chmod +x $(BINDIR)/tsm
+	@install -m 755 tsm $(BINDIR)/tsm
 	@echo ""
 	@echo "✓ Installed to $(BINDIR)/tsm"
 	@echo ""
-	@echo "Configuration will be created automatically on first run at:"
+	@echo "Configuration will be created on first run at:"
 	@echo "  ~/.config/tsm/config"
 	@echo ""
 	@echo "Add to your window manager config:"
-	@echo "  Hyprland:  bind = SUPER, N, exec, tsm"
-	@echo "  Sway:      bindsym \$$mod+n exec tsm"
-	@echo "  i3:        bindsym \$$mod+n exec --no-startup-id tsm"
+	@echo "  Hyprland:  bind = SUPER, T, exec, tsm"
+	@echo "  Sway:      bindsym \$$mod+t exec tsm"
+	@echo "  i3:        bindsym \$$mod+t exec --no-startup-id tsm"
 	@echo ""
 	@echo "Run 'tsm --help' for more information"
-	
+
 uninstall:
 	@echo "Uninstalling tsm..."
 	@rm -f $(BINDIR)/tsm
 	@echo "Removed $(BINDIR)/tsm"
 	@echo ""
-	@echo "Note: Configuration at ~/.config/tsm/ was preserved"
-	@echo "To remove config: rm -rf ~/.config/tsm"
+	@echo "Note: configuration at ~/.config/tsm/ was preserved"
+	@echo "To remove it: rm -rf ~/.config/tsm"
+
+lint:
+	shellcheck tsm

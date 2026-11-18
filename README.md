@@ -1,20 +1,24 @@
-# tsm - tmux session manager
+# tsm — tmux session manager
 
-A minimal, keyboard-driven tmux session manager for dmenu-like launchers (wofi/rofi/dmenu/fzf).
+[![shellcheck](https://github.com/universal-abstraction/tsm/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/universal-abstraction/tsm/actions/workflows/shellcheck.yml)
+
+A small Bash script that lists your tmux sessions in a dmenu-style launcher
+(wofi, rofi, dmenu or fzf) and opens the one you pick in a new terminal window.
 
 ## Features
 
-- **Quick access** via wofi/rofi/dmenu/fzf
-- **Create sessions** with custom names
-- **Recent sessions** - last 10 active sessions
-- **Instant attach** - select and connect
+- Pick a session from wofi, rofi, dmenu or fzf.
+- Sessions are listed by last activity, most recent first.
+- Create a new session from the same menu. If a session with that name
+  already exists, tsm opens it instead.
+- Names are matched exactly: picking `dev` never opens `development`.
 
 ## Requirements
 
 - Bash 4+
 - tmux
 - One of: `wofi`, `rofi`, `dmenu`, or `fzf`
-- A terminal emulator (kitty, foot, alacritty, etc.)
+- A terminal emulator (foot, kitty, alacritty, ...)
 - Optional: `notify-send` for notifications
 
 ## Installation
@@ -25,11 +29,16 @@ cd tsm
 make install
 ```
 
-This installs `tsm` to `~/.local/bin/` (ensure it's in your `$PATH`).
+This copies `tsm` to `~/.local/bin/`; make sure that directory is in your
+`$PATH`. To install somewhere else, set `PREFIX`:
 
-## Quick Start
+```bash
+make install PREFIX=/usr/local
+```
 
-Bind `tsm` to a hotkey in your window manager:
+## Usage
+
+Bind `tsm` to a key in your window manager:
 
 **Hyprland:**
 ```
@@ -46,35 +55,49 @@ bindsym $mod+t exec tsm
 bindsym $mod+t exec --no-startup-id tsm
 ```
 
-Press the hotkey and select:
-- **New Session** - Create a new tmux session
-- **[session name]** - Attach to existing session
+The menu shows:
+- **New Session** — asks for a name, creates the session and opens it.
+- **[session name]** — opens an existing session.
+
+With `MENU_LAUNCHER="fzf"`, run `tsm` from a terminal: fzf needs one to draw
+the menu. The chosen session still opens in a new terminal window.
 
 ## Configuration
 
-Configuration file is automatically created on first run at:
-```
-~/.config/tsm/config
-```
+On first run tsm creates `~/.config/tsm/config` (or
+`$XDG_CONFIG_HOME/tsm/config`) with every option commented out. Uncomment a
+line to change it:
 
 ```bash
-# Terminal emulator
-TERMINAL="kitty"
+# Terminal emulator command. tsm appends "tmux attach-session -t <name>".
+TERMINAL="foot"
 
-# Menu launcher (wofi, rofi, dmenu, fzf)
+# Menu launcher: wofi, rofi, dmenu, or fzf
 MENU_LAUNCHER="wofi"
 
-# Number of sessions to show
+# Number of sessions to show in the menu
 RECENT_SESSIONS_COUNT="10"
 ```
+
+The values above are the defaults. If `TERMINAL` is already set in your
+environment and the config does not override it, tsm uses that value.
+
+Some terminals need a flag before the command to run. Include it in
+`TERMINAL`, for example `TERMINAL="alacritty -e"` or
+`TERMINAL="gnome-terminal --"`.
 
 ## Uninstall
 
 ```bash
 make uninstall
-rm -rf ~/.config/tsm  # optional: remove config
+```
+
+To also remove the configuration:
+
+```bash
+rm -rf ~/.config/tsm
 ```
 
 ## License
 
-MIT
+MIT, see [LICENSE](LICENSE).
