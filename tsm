@@ -5,8 +5,9 @@
 # Usage: tsm [options]
 #
 # Options:
-#   --help    Show this help message
-#   --config  Print config file location
+#   -h, --help     Show this help message
+#   --config       Print config file location
+#   -v, --version  Show version information
 #
 
 set -euo pipefail
@@ -22,6 +23,7 @@ CONFIG_FILE="$CONFIG_DIR/config"
 # SECTION 2: DEFAULT CONFIGURATION
 # ============================================================================
 
+# Defaults; the environment and the config file can override them.
 : "${TERMINAL:=foot}"
 : "${MENU_LAUNCHER:=wofi}"
 : "${RECENT_SESSIONS_COUNT:=10}"
@@ -36,34 +38,46 @@ init_config() {
     if [[ ! -f "$CONFIG_FILE" ]]; then
         cat > "$CONFIG_FILE" << 'EOF'
 # tsm configuration
+# Uncomment a line to override the default.
 
-# Terminal emulator
-TERMINAL="foot"
+# Terminal emulator command. tsm appends "tmux attach-session -t <name>".
+# Add the flag your terminal needs before a command, e.g. "alacritty -e".
+#TERMINAL="foot"
 
 # Menu launcher: wofi, rofi, dmenu, or fzf
-MENU_LAUNCHER="wofi"
+#MENU_LAUNCHER="wofi"
 
-# Number of recent sessions to show in menu
-RECENT_SESSIONS_COUNT="10"
+# Number of sessions to show in the menu
+#RECENT_SESSIONS_COUNT="10"
 EOF
     fi
 }
 
 load_config() {
-    [[ -f "$CONFIG_FILE" ]] && source "$CONFIG_FILE"
+    if [[ -f "$CONFIG_FILE" ]]; then
+        # shellcheck source=/dev/null
+        source "$CONFIG_FILE"
+    fi
 }
 
 # ============================================================================
 # SECTION 4: CORE FUNCTIONS
 # ============================================================================
 
+# Session names, most recently active first.
 get_sessions() {
-    tmux list-sessions -F "#{session_name}" 2>/dev/null | head -n "$RECENT_SESSIONS_COUNT" || true
+    tmux list-sessions -F '#{session_activity} #{session_name}' 2>/dev/null \
+        | sort -rn \
+        | cut -d' ' -f2- \
+        | head -n "$RECENT_SESSIONS_COUNT" \
+        || true
 }
 
+# The "=" prefix makes tmux match the session name exactly. Without it,
+# "-t dev" also matches a session called "development".
 session_exists() {
     local name="$1"
-    tmux has-session -t "$name" 2>/dev/null
+    tmux has-session -t "=$name" 2>/dev/null
 }
 
 create_session() {
@@ -73,12 +87,14 @@ create_session() {
 
 attach_session() {
     local name="$1"
-    $TERMINAL tmux attach-session -t "$name" &
+    # TERMINAL is intentionally unquoted so it can carry flags ("alacritty -e").
+    # shellcheck disable=SC2086
+    $TERMINAL tmux attach-session -t "=$name" &
 }
 
 normalize_session_name() {
     local input="$1"
-    # tmux doesn't allow dots and colons in session names
+    # tmux replaces dots and colons in session names, so avoid them up front
     echo "$input" | tr ' .:' '---' | sed 's/--*/-/g; s/^-//; s/-$//'
 }
 
@@ -97,9 +113,10 @@ notify() {
 
 ICON_NEW="✨"
 ICON_SESSION="💻"
+MENU_NEW="$ICON_NEW New Session"
 
 build_menu() {
-    echo "$ICON_NEW New Session"
+    echo "$MENU_NEW"
 
     local sessions
     sessions=$(get_sessions)
@@ -108,6 +125,17 @@ build_menu() {
             echo "$ICON_SESSION $session"
         done <<< "$sessions"
     fi
+}
+
+check_launcher() {
+    case "$MENU_LAUNCHER" in
+        wofi|rofi|dmenu|fzf) ;;
+        *)
+            echo "Unknown menu launcher: $MENU_LAUNCHER" >&2
+            echo "Supported: wofi, rofi, dmenu, fzf" >&2
+            exit 1
+            ;;
+    esac
 }
 
 show_menu() {
@@ -124,15 +152,12 @@ show_menu() {
         fzf)
             fzf --prompt="tmux> " --height=40%
             ;;
-        *)
-            echo "Unknown menu launcher: $MENU_LAUNCHER" >&2
-            exit 1
-            ;;
     esac
 }
 
 prompt_input() {
     local prompt_text="$1"
+    local input
 
     case "$MENU_LAUNCHER" in
         wofi)
@@ -142,17 +167,13 @@ prompt_input() {
                 --lines 0
             ;;
         rofi)
-            echo "" | rofi -dmenu -p "$prompt_text" -lines 0
+            echo "" | rofi -dmenu -p "$prompt_text" -l 0
             ;;
         dmenu)
             echo "" | dmenu -p "$prompt_text"
             ;;
-        fzf)
-            read -p "$prompt_text: " input
-            echo "$input"
-            ;;
         *)
-            read -p "$prompt_text: " input
+            read -r -p "$prompt_text: " input
             echo "$input"
             ;;
     esac
@@ -162,12 +183,15 @@ create_new_session() {
     local session_name
     session_name=$(prompt_input "Session name")
 
-    [[ -z "$session_name" ]] && return 1
+    [[ -z "$session_name" ]] && return 0
 
     local normalized
     normalized=$(normalize_session_name "$session_name")
 
-    [[ -z "$normalized" ]] && notify "Invalid session name" && return 1
+    if [[ -z "$normalized" ]]; then
+        notify "Invalid session name"
+        return 1
+    fi
 
     if session_exists "$normalized"; then
         notify "Session already exists: $normalized"
@@ -182,22 +206,21 @@ create_new_session() {
 handle_selection() {
     local selection="$1"
 
-    case "$selection" in
-        *"New Session"*)
-            create_new_session
-            ;;
-        *)
-            local session_name
-            session_name=$(echo "$selection" | sed "s/^$ICON_SESSION //" | tr -d ' ')
+    if [[ "$selection" == "$MENU_NEW" ]]; then
+        create_new_session
+        return
+    fi
 
-            if session_exists "$session_name"; then
-                attach_session "$session_name"
-            else
-                notify "Session not found: $session_name"
-                exit 1
-            fi
-            ;;
-    esac
+    # Strip the icon prefix; keep the rest verbatim, since sessions created
+    # outside tsm may contain spaces.
+    local session_name="${selection#"$ICON_SESSION "}"
+
+    if session_exists "$session_name"; then
+        attach_session "$session_name"
+    else
+        notify "Session not found: $session_name"
+        exit 1
+    fi
 }
 
 # ============================================================================
@@ -212,9 +235,9 @@ USAGE:
     tsm [OPTIONS]
 
 OPTIONS:
-    --help      Show this help message
-    --config    Print config file location
-    --version   Show version information
+    -h, --help     Show this help message
+    --config       Print config file location
+    -v, --version  Show version information
 
 CONFIGURATION:
     Config file: ~/.config/tsm/config
@@ -246,15 +269,18 @@ main() {
             ;;
         -*)
             echo "Unknown option: $1" >&2
+            echo "Use --help for usage information" >&2
             exit 1
             ;;
     esac
 
     init_config
     load_config
+    check_launcher
 
+    # A cancelled menu exits non-zero; treat it as an empty selection.
     local selection
-    selection=$(build_menu | show_menu)
+    selection=$(build_menu | show_menu) || true
 
     [[ -z "$selection" ]] && exit 0
 
